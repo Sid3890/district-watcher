@@ -1,0 +1,75 @@
+{
+  "cookies": [
+    {
+      "name": "x-device-id",
+      "value": "6d5c33d1-2fdd-464d-a6a0-7867c46ce485",
+      "domain": "www.district.in",
+      "path": "/",
+      "expires": 1829557902,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "x-guest-token",
+      "value": "1794997898948652370_6463367718860411323_a57eba593f5fcd40a494a91ddc7dc50073da5cae012cb1db1a6170628628b592",
+      "domain": "www.district.in",
+      "path": "/",
+      "expires": 1797589911.721245,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "AKA_A2",
+      "value": "A",
+      "domain": ".district.in",
+      "path": "/",
+      "expires": 1795001498.891795,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "location",
+      "value": "%7B%22fullname%22%3A%22International%20Tech%20Park%20Gurgaon%2CGolf%20Course%20Ext%20Rd%2C%20Alahawas%2C%20Sector%2059%2C%20Gurugram%2C%20Haryana%2C%20India%22%2C%22google_place_id%22%3A%22ChIJuyrrMJMhDTkRekt_0twP-C8%22%2C%22lat%22%3A28.4080424%2C%22long%22%3A77.1165992%2C%22subtitle%22%3A%22Haryana%22%2C%22title%22%3A%22Gurugram%22%2C%22id%22%3A1%2C%22cityId%22%3A1%2C%22cityName%22%3A%22Delhi%20NCR%22%2C%22pCityId%22%3A%2257%22%2C%22pCityKey%22%3A%22gurgaon%22%2C%22pCityName%22%3A%22Gurugram%22%2C%22pStateKey%22%3A%22haryana%22%2C%22pStateName%22%3A%22Haryana%22%2C%22countryId%22%3A%221%22%2C%22placeType%22%3A%22GOOGLE_PLACE%22%2C%22placeId%22%3A%22ChIJQ3GqXwAZDTkR2IGBwuLDcCk%22%2C%22subzoneId%22%3A%22645%22%2C%22countryKey%22%3A%22india%22%2C%22zoneId%22%3A%222%22%7D",
+      "domain": "www.district.in",
+      "path": "/",
+      "expires": 1829557902,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "userProfile",
+      "value": "",
+      "domain": "www.district.in",
+      "path": "/",
+      "expires": 1829557902,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_dd_s",
+      "value": "rum=0&expire=1794998802264",
+      "domain": "www.district.in",
+      "path": "/",
+      "expires": 1794998802,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "RT",
+      "value": "\"z=1&dm=www.district.in&si=4e7d16ba-4abb-4d7f-9ee7-47d54e5534c0&ss=mwlzej92&sl=2&tt=pu&rl=1&obo=1&ld=4b4&r=3q45rsd6&hd=4b4\"",
+      "domain": ".www.district.in",
+      "path": "/",
+      "expires": 1795602704,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}
