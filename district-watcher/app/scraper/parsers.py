@@ -98,20 +98,105 @@ def parse_intercepted_seat_json(
     movie_title: Optional[str],
     theatre_name: str,
     showtime_str: str,
-    date: str
+    date: str,
+    price_map: Optional[Dict[str, float]] = None,
 ) -> Optional[SeatMapResponse]:
     """
     Parses intercepted seat layout JSON from District / ticketing API.
-    Handles standard Next.js / BookMyShow / District layout JSON variations.
+    Handles District Next.js / select-seat layout format as well as generic ticketing JSON.
     """
     try:
-        # Check potential root keys for seat maps
         data = payload.get("data") or payload.get("response") or payload
         categories_dict: Dict[str, Dict[str, Any]] = {}
         seats: List[SeatItem] = []
         screen_name = data.get("screen_name") or data.get("audi") or "Screen 1"
 
-        # Check for sections / areas / categories array
+        # 1. District / Zomato select-seat format: seatLayout.colAreas.objArea
+        col_areas = (
+            data.get("seatLayout", {}).get("colAreas", {}).get("objArea")
+            or payload.get("seatLayout", {}).get("colAreas", {}).get("objArea")
+            or []
+        )
+
+        if col_areas:
+            p_map = price_map or {}
+            for area in col_areas:
+                cat_name = (area.get("AreaDesc") or area.get("name") or "STANDARD").strip().upper()
+                price = p_map.get(cat_name) or p_map.get(cat_name.replace(" ", "")) or float(area.get("Price") or area.get("price") or 0.0)
+                if cat_name not in categories_dict:
+                    categories_dict[cat_name] = {"name": cat_name, "price": price, "rows": set()}
+
+                rows = area.get("objRow") or []
+                for row in rows:
+                    raw_phy_row = str(row.get("PhyRowId") or "").strip().upper()
+                    phy_row = re.sub(r"[^A-Z0-9\-]", "", raw_phy_row)
+
+                    raw_seats = row.get("objSeat") or []
+                    for s in raw_seats:
+                        disp_num = str(s.get("displaySeatNumber") or s.get("seatNumber") or "").strip()
+                        if not disp_num:
+                            continue
+
+                        # Extract row label & seat number
+                        if re.match(r"^[A-Z]+\d+$", disp_num):
+                            m = re.match(r"^([A-Z]+)(\d+)$", disp_num)
+                            row_label = m.group(1)
+                            seat_num = m.group(2)
+                            seat_id = disp_num
+                        elif phy_row:
+                            row_label = phy_row
+                            seat_num = disp_num
+                            seat_id = f"{row_label}{seat_num}"
+                        else:
+                            row_label = ""
+                            seat_num = disp_num
+                            seat_id = disp_num
+
+                        if row_label:
+                            categories_dict[cat_name]["rows"].add(row_label)
+
+                        # District SeatStatus: "0" = Available, "1" = Sold/Booked, "1000"/"1001" = Wheelchair Available, "1002" = Blocked
+                        seat_status_code = str(s.get("SeatStatus", "1")).strip().lower()
+                        if seat_status_code in ("0", "1000", "1001", "available", "open", "free", "vacant"):
+                            status = "available"
+                        elif seat_status_code in ("1", "sold", "booked", "occupied", "2"):
+                            status = "sold"
+                        else:
+                            status = "blocked"
+
+                        seats.append(SeatItem(
+                            seat_id=seat_id,
+                            row_label=row_label,
+                            seat_num=seat_num,
+                            col_idx=s.get("GridSeatNum") or s.get("col_index"),
+                            status=status,
+                            category=cat_name,
+                            price=price or float(s.get("price") or 0.0),
+                        ))
+
+            if seats:
+                cat_list = [
+                    SeatCategory(
+                        name=v["name"],
+                        price=v["price"],
+                        rows=sorted(list(v["rows"]))
+                    )
+                    for v in categories_dict.values()
+                ]
+                return SeatMapResponse(
+                    movie_title=movie_title,
+                    theatre_name=theatre_name,
+                    showtime_str=showtime_str,
+                    date=date,
+                    screen_name=screen_name,
+                    categories=cat_list,
+                    seats=seats,
+                    total_available=sum(1 for s in seats if s.status == "available"),
+                    total_sold=sum(1 for s in seats if s.status == "sold"),
+                    total_blocked=sum(1 for s in seats if s.status == "blocked"),
+                )
+
+        # 2. Generic ticketing areas format fallback
         areas = (
             data.get("areas")
             or data.get("sections")
@@ -138,11 +223,12 @@ def parse_intercepted_seat_json(
                     if not seat_num:
                         continue
                     seat_id = f"{row_label}{seat_num}" if row_label else seat_num
-                    raw_status = str(s.get("status") or s.get("state") or "").lower()
+                    raw_status = str(s.get("status") or s.get("state") or s.get("SeatStatus") or "").lower()
                     
-                    if raw_status in ("available", "open", "free", "vacant", "1"):
+                    # Note: On District/ticketing APIs: 0 is available, 1 is sold
+                    if raw_status in ("available", "open", "free", "vacant", "0", "1000", "1001"):
                         status = "available"
-                    elif raw_status in ("sold", "booked", "occupied", "2"):
+                    elif raw_status in ("sold", "booked", "occupied", "1", "2"):
                         status = "sold"
                     else:
                         status = "blocked"
@@ -151,7 +237,7 @@ def parse_intercepted_seat_json(
                         seat_id=seat_id,
                         row_label=row_label,
                         seat_num=seat_num,
-                        col_idx=s.get("col_index") or s.get("x"),
+                        col_idx=s.get("col_index") or s.get("x") or s.get("GridSeatNum"),
                         status=status,
                         category=cat_name,
                         price=price or float(s.get("price") or 0.0),

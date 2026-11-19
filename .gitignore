@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Playwright debug & runtime screenshots
+data/*_error.png
+data/*.png
+district-watcher/data/*_error.png
+district-watcher/data/*.png
+!data/debug_shows_clicked.png
+
+# Runtime session state
+data/browser_state.json
+district-watcher/data/browser_state.json
