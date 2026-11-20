@@ -120,49 +120,104 @@ class BackgroundMonitor:
                 city=city,
             )
 
-            matched_theatre = None
-            for t in theatres:
-                if matches_theatre(t.theatre_name, theatre_name):
-                    matched_theatre = t
-                    break
+            # Case-insensitive substring matching of available theatre names
+            target_sub = theatre_name.strip().lower()
+            matching_theatres = [
+                t for t in theatres
+                if target_sub in t.theatre_name.lower() or t.theatre_name.lower() in target_sub
+            ]
 
-            if matched_theatre and matched_theatre.showtimes:
-                pref_time = job.get("showtime_str")
-                matching_shows = []
-                if pref_time and pref_time.strip():
-                    matching_shows = [
-                        s for s in matched_theatre.showtimes 
-                        if pref_time.lower() in s.time_str.lower()
+            if not matching_theatres:
+                summary = f"Checked at {now_str} — Bookings not opened yet for '{theatre_name}' on {target_date}."
+                await update_watch_check_result(job_id, summary=summary)
+                return
+
+            pref_time = (job.get("showtime_str") or "").strip().lower()
+            open_theatres_to_alert = []
+            sold_out_theatres = []
+
+            for t in matching_theatres:
+                if not t.showtimes:
+                    continue
+
+                if pref_time:
+                    candidate_shows = [
+                        s for s in t.showtimes 
+                        if pref_time in s.time_str.lower()
                     ]
                 else:
-                    matching_shows = matched_theatre.showtimes
+                    candidate_shows = t.showtimes
 
-                if matching_shows:
-                    show_times_list = ", ".join([s.time_str for s in matching_shows])
-                    summary = f"OPEN! Shows found: {show_times_list} at {now_str}"
-                    details = {
-                        "theatre_name": matched_theatre.theatre_name,
-                        "showtimes": [s.dict() for s in matching_shows],
-                        "triggered_at": datetime.now().isoformat(),
-                    }
-                    await update_watch_check_result(
-                        job_id,
-                        summary=summary,
-                        triggered=True,
-                        triggered_details=details,
+                if not candidate_shows:
+                    continue
+
+                # Check if shows are open vs completely sold out / full
+                truly_open_shows = []
+                for s in candidate_shows:
+                    # If avail_seats is 0 or seat_status is Sold Out, bookings are closed/full
+                    if s.avail_seats == 0 or (s.seat_status and s.seat_status.lower() == "sold out"):
+                        continue
+                    truly_open_shows.append(s)
+
+                if truly_open_shows:
+                    shows_str = ", ".join([s.time_str for s in truly_open_shows])
+                    open_theatres_to_alert.append({
+                        "theatre": t,
+                        "shows": truly_open_shows,
+                        "shows_str": shows_str,
+                    })
+                else:
+                    sold_shows_str = ", ".join([s.time_str for s in candidate_shows])
+                    sold_out_theatres.append(f"{t.theatre_name} ({sold_shows_str})")
+
+            # If matching theatres have open bookings, send notifications for EACH theatre separately
+            if open_theatres_to_alert:
+                for item in open_theatres_to_alert:
+                    t = item["theatre"]
+                    shows_str = item["shows_str"]
+                    title = f"🎉 SHOW OPENED: {movie_title}!"
+                    message = (
+                        f"Date: {target_date}\n"
+                        f"Theater: {t.theatre_name}\n"
+                        f"Show Time: {shows_str}\n"
+                        f"Bookings are now OPEN!"
                     )
                     await trigger_alert(
                         watch_job_id=job_id,
                         event_type="SHOW_OPENED",
-                        title=f"🎉 SHOW OPENED: {movie_title}!",
-                        message=f"Bookings are now OPEN at {matched_theatre.theatre_name} for {target_date} ({show_times_list})!"
+                        title=title,
+                        message=message,
                     )
-                    return
-                else:
-                    summary = f"Theatre listed at {now_str}, but specific time '{pref_time}' not open yet."
-                    await update_watch_check_result(job_id, summary=summary)
+                    await asyncio.sleep(1.0)  # Safe pause between OS toasts
+
+                theatre_names_str = ", ".join([item["theatre"].theatre_name for item in open_theatres_to_alert])
+                summary = f"OPEN! Shows found for {len(open_theatres_to_alert)} cinema(s): {theatre_names_str} at {now_str}"
+                details = {
+                    "theatres": [
+                        {
+                            "theatre_name": item["theatre"].theatre_name,
+                            "showtimes": [s.dict() for s in item["shows"]],
+                        }
+                        for item in open_theatres_to_alert
+                    ],
+                    "triggered_at": datetime.now().isoformat(),
+                }
+                await update_watch_check_result(
+                    job_id,
+                    summary=summary,
+                    triggered=True,
+                    triggered_details=details,
+                )
+                return
+
+            elif sold_out_theatres:
+                summary = (
+                    f"Checked at {now_str} — Shows listed but currently FULL / Sold Out for: "
+                    f"{'; '.join(sold_out_theatres)}. Monitoring for cancellations or newly released seats..."
+                )
+                await update_watch_check_result(job_id, summary=summary)
             else:
-                summary = f"Checked at {now_str} — Bookings not opened yet for {theatre_name}."
+                summary = f"Found {len(matching_theatres)} cinema(s) matching '{theatre_name}' at {now_str}, but specific time '{job.get('showtime_str')}' is not open yet."
                 await update_watch_check_result(job_id, summary=summary)
 
         elif mode == "SEAT_AVAILABILITY":
@@ -218,14 +273,22 @@ class BackgroundMonitor:
                     triggered=True,
                     triggered_details=details,
                 )
+                title = f"🎟️ SEATS OPEN: {movie_title}!"
+                message = (
+                    f"Date: {target_date}\n"
+                    f"Theater: {theatre_name}\n"
+                    f"Show Time: {showtime_str}\n"
+                    f"Seats Opening: {open_str}\n"
+                    f"Selected seats are now available to book!"
+                )
                 await trigger_alert(
                     watch_job_id=job_id,
                     event_type="SEATS_AVAILABLE",
-                    title=f"🎟️ SEATS OPEN: {movie_title}!",
-                    message=f"Seats {open_str} are now AVAILABLE at {theatre_name} ({showtime_str})! Book now!"
+                    title=title,
+                    message=message,
                 )
             else:
-                summary = f"Checked at {now_str} — {', '.join(watched_seats)} still booked/held."
+                summary = f"Checked at {now_str} — {', '.join(watched_seats)} still booked/held in {theatre_name} ({showtime_str})."
                 await update_watch_check_result(job_id, summary=summary)
 
 

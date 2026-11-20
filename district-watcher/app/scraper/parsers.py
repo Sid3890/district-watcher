@@ -21,21 +21,12 @@ def clean_theatre_name(name: str) -> str:
     return normalize_text(name).lower()
 
 def matches_theatre(theatre_candidate: str, target_theatre: str) -> bool:
-    """Fuzzy/substring check for matching theatre names."""
+    """Substring check for matching theatre names (case-insensitive)."""
     cand = clean_theatre_name(theatre_candidate)
     target = clean_theatre_name(target_theatre)
     if not target or not cand:
         return False
-    if target in cand or cand in target:
-        return True
-    
-    # Token-level intersection check
-    target_words = [w for w in re.split(r"[^\w]+", target) if len(w) > 2]
-    cand_words = set(re.split(r"[^\w]+", cand))
-    if target_words:
-        matched = sum(1 for w in target_words if w in cand_words)
-        return (matched / len(target_words)) >= 0.6
-    return False
+    return target in cand or cand in target
 
 def parse_movie_cards(raw_movies: List[Dict[str, Any]]) -> List[MovieItem]:
     movies: List[MovieItem] = []
@@ -83,6 +74,9 @@ def parse_theatres_and_shows(theatre_data: List[Dict[str, Any]]) -> List[Theatre
                     format_tag=s.get("format_tag"),
                     booking_url_or_selector=s.get("booking_url_or_selector"),
                     session_id=s.get("session_id"),
+                    avail_seats=s.get("avail_seats"),
+                    total_seats=s.get("total_seats"),
+                    seat_status=s.get("seat_status"),
                 ))
 
         theatres.append(TheatreItem(
@@ -122,7 +116,7 @@ def parse_intercepted_seat_json(
             p_map = price_map or {}
             for area in col_areas:
                 cat_name = (area.get("AreaDesc") or area.get("name") or "STANDARD").strip().upper()
-                price = p_map.get(cat_name) or p_map.get(cat_name.replace(" ", "")) or float(area.get("Price") or area.get("price") or 0.0)
+                price = p_map.get(cat_name) or p_map.get(cat_name.replace(" ", "")) or float(area.get("AreaPrice") or area.get("Price") or area.get("price") or 0.0)
                 if cat_name not in categories_dict:
                     categories_dict[cat_name] = {"name": cat_name, "price": price, "rows": set()}
 

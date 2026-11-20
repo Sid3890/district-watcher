@@ -28,13 +28,14 @@
   };
 
   // DOM Elements
+  const silenceAlarmBtn = document.getElementById('silence-alarm-btn');
   const soundToggleBtn = document.getElementById('sound-toggle-btn');
   const soundToggleLabel = document.getElementById('sound-toggle-label');
   const soundIcon = document.getElementById('sound-icon');
   const soundToneSelect = document.getElementById('sound-tone-select');
   const soundVolumeSlider = document.getElementById('sound-volume-slider');
-  const testAlertBtn = document.getElementById('test-alert-btn');
   const armAudioBtn = document.getElementById('arm-audio-btn');
+  const selectAllSoldBtn = document.getElementById('select-all-sold-btn');
 
   const citySelect = document.getElementById('city-select');
   const movieSelect = document.getElementById('movie-select');
@@ -366,9 +367,16 @@
     }
     let html = '';
     theatre.showtimes.forEach((s) => {
+      const isSoldOut = (s.avail_seats === 0) || (s.seat_status && s.seat_status.toLowerCase() === 'sold out');
+      const statusBadge = isSoldOut 
+        ? '<span class="text-[9px] px-1 py-0.2 rounded bg-red-950/80 text-red-300 border border-red-800 font-bold ml-1">FULL</span>' 
+        : (s.seat_status && s.seat_status !== 'Available' ? `<span class="text-[9px] px-1 py-0.2 rounded bg-amber-950/80 text-amber-300 border border-amber-800 font-bold ml-1">${s.seat_status}</span>` : '');
+
       html += `
-        <button type="button" class="showtime-pill px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-800 hover:bg-cyan-950 hover:border-cyan-500 text-xs font-semibold text-gray-200 transition" data-time="${s.time_str}">
-          ${s.time_str} <span class="text-[10px] text-cyan-400 font-mono">${s.format_tag || '2D'}</span>
+        <button type="button" class="showtime-pill px-3 py-1.5 rounded-lg border border-gray-700 bg-gray-800 hover:bg-cyan-950 hover:border-cyan-500 text-xs font-semibold text-gray-200 transition inline-flex items-center space-x-1" data-time="${s.time_str}" data-soldout="${isSoldOut}">
+          <span>${s.time_str}</span>
+          <span class="text-[10px] text-cyan-400 font-mono">${s.format_tag || '2D'}</span>
+          ${statusBadge}
         </button>
       `;
     });
@@ -424,6 +432,7 @@
           date: targetDateInput.value,
           theatre_name: theatreName,
           showtime_str: state.selectedShowtime,
+          city: state.currentCity || 'Chennai',
         }),
       });
 
@@ -758,9 +767,35 @@
         const alerts = await res.json();
         if (alerts && alerts.length > 0) {
           handleIncomingAlert(alerts[0]);
+          if (silenceAlarmBtn) silenceAlarmBtn.classList.remove('hidden');
+        } else {
+          if (!currentActiveAlert && silenceAlarmBtn) {
+            checkLocalSoundStatus();
+          }
         }
       }
     } catch (e) {}
+  }
+
+  async function checkLocalSoundStatus() {
+    try {
+      const res = await fetch('/api/alerts/sound-status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ringing) {
+          if (silenceAlarmBtn) silenceAlarmBtn.classList.remove('hidden');
+        } else {
+          if (silenceAlarmBtn) silenceAlarmBtn.classList.add('hidden');
+        }
+      }
+    } catch (e) {}
+  }
+
+  async function silenceLocalSound() {
+    try {
+      await fetch('/api/alerts/silence-sound', { method: 'POST' });
+    } catch (e) {}
+    if (silenceAlarmBtn) silenceAlarmBtn.classList.add('hidden');
   }
 
   async function pollRecentAlertHistory() {
@@ -795,6 +830,8 @@
     }
     currentActiveAlert = alertItem;
 
+    if (silenceAlarmBtn) silenceAlarmBtn.classList.remove('hidden');
+
     playAlertSound(state.settings.sound_tone, state.settings.sound_volume);
 
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -820,6 +857,7 @@
   }
 
   async function acknowledgeCurrentAlert() {
+    silenceLocalSound();
     if (!currentActiveAlert) {
       alertModal.classList.add('hidden');
       alertModal.classList.remove('flex');
@@ -863,22 +901,24 @@
       saveSettings({ sound_volume: vol });
     });
 
-    testAlertBtn.addEventListener('click', async () => {
-      initAudioContext();
-      playAlertSound(state.settings.sound_tone, state.settings.sound_volume);
-      try {
-        await fetch('/api/test-alert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: 'District Watcher Test Alert',
-            message: 'Audio chime and OS desktop notification tested successfully!',
-          }),
+    if (selectAllSoldBtn) {
+      selectAllSoldBtn.addEventListener('click', () => {
+        initAudioContext();
+        const soldButtons = seatGridContent.querySelectorAll('.seat-btn.seat-sold');
+        if (soldButtons.length === 0) {
+          alert('No booked or sold seats found on this seating chart.');
+          return;
+        }
+        soldButtons.forEach((btn) => {
+          const seatId = btn.getAttribute('data-seat-id');
+          state.selectedSeats.add(seatId);
+          btn.classList.add('seat-selected');
         });
-      } catch (e) {
-        console.error('Test alert dispatch error:', e);
-      }
-    });
+        renderSelectedSeatsChips();
+        const anyRadio = document.querySelector('input[name="match-rule"][value="ANY"]');
+        if (anyRadio) anyRadio.checked = true;
+      });
+    }
 
     citySelect.addEventListener('change', (e) => {
       const city = e.target.value;
@@ -962,6 +1002,16 @@
 
     refreshWatchesBtn.addEventListener('click', () => {
       fetchWatchJobs();
+    });
+
+    if (silenceAlarmBtn) {
+      silenceAlarmBtn.addEventListener('click', async () => {
+        await silenceLocalSound();
+      });
+    }
+
+    modalBookBtn.addEventListener('click', () => {
+      silenceLocalSound();
     });
 
     modalAckBtn.addEventListener('click', () => {

@@ -5,50 +5,41 @@ import asyncio
 import logging
 from typing import Optional
 from app.database import get_settings, create_alert_log
+from app.notifications.sound_alarm import local_alarm
 
 logger = logging.getLogger("district_watcher.notifier")
 
 def _send_windows_toast(title: str, message: str) -> bool:
-    """Send a native Windows notification via PowerShell (Toast or Balloon fallback)."""
-    # Clean text to prevent command injection
-    safe_title = title.replace('"', '`"').replace("'", "''")
-    safe_msg = message.replace('"', '`"').replace("'", "''")
+    """Send a native Windows notification via PowerShell WinRT Toast using env vars for safe formatting."""
+    env = os.environ.copy()
+    env["TOAST_TITLE"] = title
+    env["TOAST_MSG"] = message
 
-    # 1. Attempt WinRT Toast Notification
-    toast_cmd = f"""
-    try {{
+    toast_cmd = """
+    try {
         [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
         $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
         $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
         $xml.LoadXml($template.GetXml())
         $textNodes = $xml.GetElementsByTagName('text')
-        $textNodes.Item(0).AppendChild($xml.CreateTextNode('{safe_title}')) | Out-Null
-        $textNodes.Item(1).AppendChild($xml.CreateTextNode('{safe_msg}')) | Out-Null
+        $textNodes.Item(0).AppendChild($xml.CreateTextNode($env:TOAST_TITLE)) | Out-Null
+        $textNodes.Item(1).AppendChild($xml.CreateTextNode($env:TOAST_MSG)) | Out-Null
         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('District Watcher').Show($toast)
         exit 0
-    }} catch {{
-        # Fallback to NotifyIcon balloon
-        [void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-        $objNotifyIcon = New-Object System.Windows.Forms.NotifyIcon
-        $objNotifyIcon.Icon = [System.Drawing.SystemIcons]::Information
-        $objNotifyIcon.BalloonTipIcon = 'Info'
-        $objNotifyIcon.BalloonTipTitle = '{safe_title}'
-        $objNotifyIcon.BalloonTipText = '{safe_msg}'
-        $objNotifyIcon.Visible = $True
-        $objNotifyIcon.ShowBalloonTip(10000)
-        Start-Sleep -Seconds 1
-        $objNotifyIcon.Dispose()
-    }}
+    } catch {
+        exit 1
+    }
     """
     try:
-        subprocess.run(
+        res = subprocess.run(
             ["powershell", "-NoProfile", "-Command", toast_cmd],
             capture_output=True,
             timeout=8,
-            check=False
+            check=False,
+            env=env
         )
-        return True
+        return res.returncode == 0
     except Exception as e:
         logger.warning(f"PowerShell toast notification failed: {e}")
         return False
@@ -58,24 +49,36 @@ def _send_macos_notification(title: str, message: str) -> bool:
     safe_msg = message.replace('"', '\\"')
     script = f'display notification "{safe_msg}" with title "{safe_title}"'
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5, check=False)
-        return True
+        res = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5, check=False)
+        return res.returncode == 0
     except Exception as e:
         logger.warning(f"macOS notification failed: {e}")
         return False
 
 def _send_linux_notification(title: str, message: str) -> bool:
     try:
-        subprocess.run(["notify-send", title, message], capture_output=True, timeout=5, check=False)
-        return True
+        res = subprocess.run(["notify-send", title, message], capture_output=True, timeout=5, check=False)
+        return res.returncode == 0
     except Exception as e:
         logger.warning(f"Linux notify-send failed: {e}")
         return False
 
 def send_os_desktop_notification(title: str, message: str) -> None:
-    """Send desktop notification using plyer with platform-specific native fallbacks."""
-    # First try plyer
-    plyer_succeeded = False
+    """Send desktop notification using OS-native notification systems."""
+    if sys.platform == "win32":
+        if _send_windows_toast(title, message):
+            logger.info(f"Windows desktop toast notification sent: {title}")
+            return
+    elif sys.platform == "darwin":
+        if _send_macos_notification(title, message):
+            logger.info(f"macOS desktop notification sent: {title}")
+            return
+    elif sys.platform.startswith("linux"):
+        if _send_linux_notification(title, message):
+            logger.info(f"Linux desktop notification sent: {title}")
+            return
+
+    # Fallback to plyer
     try:
         from plyer import notification
         notification.notify(
@@ -84,18 +87,9 @@ def send_os_desktop_notification(title: str, message: str) -> None:
             app_name="District Watcher",
             timeout=10,
         )
-        plyer_succeeded = True
-        logger.info(f"Notification sent via plyer: {title} - {message}")
+        logger.info(f"Notification sent via plyer: {title}")
     except Exception as e:
-        logger.debug(f"plyer.notification.notify failed ({e}), trying native platform fallback...")
-
-    if not plyer_succeeded:
-        if sys.platform == "win32":
-            _send_windows_toast(title, message)
-        elif sys.platform == "darwin":
-            _send_macos_notification(title, message)
-        elif sys.platform.startswith("linux"):
-            _send_linux_notification(title, message)
+        logger.debug(f"plyer fallback notification failed: {e}")
 
 async def trigger_alert(
     watch_job_id: int,
@@ -107,7 +101,7 @@ async def trigger_alert(
     Records alert in SQLite DB and fires OS desktop notification (if enabled in settings).
     The frontend polling /api/alerts/unacknowledged handles browser chime + popup banner.
     """
-    logger.info(f"Triggering Alert for job #{watch_job_id} [{event_type}]: {title} - {message}")
+    logger.info(f"Triggering Alert for job #{watch_job_id} [{event_type}]: {title}\n{message}")
     
     # 1. Log in database for UI polling / history
     alert_id = await create_alert_log(
@@ -117,11 +111,14 @@ async def trigger_alert(
         message=message,
     )
 
-    # 2. Check settings for desktop notifications
+    # 2. Check settings for desktop notifications & local audio alarm
     settings = await get_settings()
     if settings.get("desktop_notifications_enabled", True):
-        # Run desktop notification in threadpool so it doesn't block async event loop
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, send_os_desktop_notification, title, message)
+
+    # 3. Continuous local OS audio cue (runs on host so browser does not need to be open)
+    if settings.get("sound_enabled", True):
+        local_alarm.start_alarm(timeout_seconds=60)
 
     return alert_id

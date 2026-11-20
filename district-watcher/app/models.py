@@ -36,6 +36,9 @@ class ShowtimeItem(BaseModel):
     format_tag: Optional[str] = None
     booking_url_or_selector: Optional[str] = None
     session_id: Optional[str] = None
+    avail_seats: Optional[int] = None
+    total_seats: Optional[int] = None
+    seat_status: Optional[str] = None
 
 class TheatreItem(BaseModel):
     theatre_id: str
@@ -69,6 +72,7 @@ class SeatMapRequest(BaseModel):
     date: str
     theatre_name: str
     showtime_str: str
+    city: Optional[str] = "Chennai"
 
 class SeatMapResponse(BaseModel):
     movie_title: Optional[str] = None

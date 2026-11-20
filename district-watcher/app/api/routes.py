@@ -30,6 +30,7 @@ from app.database import (
     get_recent_alerts,
 )
 from app.notifications.notifier import trigger_alert, send_os_desktop_notification
+from app.notifications.sound_alarm import local_alarm
 from app.scraper.browser_manager import browser_manager
 from app.scraper.district_client import district_client
 
@@ -58,6 +59,8 @@ async def fetch_settings():
 async def modify_settings(req: SettingsUpdateRequest):
     """Updates global app settings (sound, tone, volume, poll interval, last city)."""
     updates = req.dict(exclude_unset=True)
+    if updates.get("sound_enabled") is False:
+        local_alarm.stop_alarm()
     return await update_settings(updates)
 
 @router.get("/movies", response_model=List[MovieItem])
@@ -110,6 +113,7 @@ async def fetch_seat_map(req: SeatMapRequest):
             target_date=req.date,
             theatre_name=req.theatre_name,
             showtime_str=req.showtime_str,
+            city=req.city or "Chennai",
         )
         return seat_map
     except Exception as e:
@@ -172,9 +176,21 @@ async def list_unacknowledged_alerts():
 
 @router.post("/alerts/{id}/ack")
 async def acknowledge_alert_route(id: int = Path(..., description="Alert ID")):
-    """Marks an alert as acknowledged (stops repeating sound if looping)."""
+    """Marks an alert as acknowledged and silences local alarm audio."""
+    local_alarm.stop_alarm()
     success = await acknowledge_alert(id)
     return {"acknowledged": success, "id": id}
+
+@router.post("/alerts/silence-sound")
+async def silence_sound():
+    """Immediately silences any active local OS sound cue."""
+    local_alarm.stop_alarm()
+    return {"status": "silenced", "ringing": False}
+
+@router.get("/alerts/sound-status")
+async def sound_status():
+    """Returns whether local alarm sound is currently ringing."""
+    return {"ringing": local_alarm.is_ringing}
 
 @router.get("/alerts/recent", response_model=List[AlertLogResponse])
 async def list_recent_alerts():
@@ -190,13 +206,15 @@ async def test_alert(req: TestAlertRequest):
     jobs = await get_watch_jobs()
     sample_job_id = jobs[0]["id"] if jobs else None
     if sample_job_id is None:
+        from datetime import datetime
+        today_str = datetime.now().strftime("%Y-%m-%d")
         sample_job_id = await create_watch_job(
             mode="SHOW_OPENING",
             city="Chennai",
-            movie_title="Sample Cinema Watch",
+            movie_title="District Cinema Watch",
             movie_url="https://www.district.in/movies/",
-            target_date="2026-11-20",
-            theatre_name="PVR Palazzo",
+            target_date=today_str,
+            theatre_name="Cinema",
         )
 
     title = req.title or "District Watcher Test"

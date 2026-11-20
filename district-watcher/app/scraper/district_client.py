@@ -5,7 +5,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
-from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse, quote
 
 from playwright.async_api import Page, Response, Error as PlaywrightError
 from app.config import (
@@ -66,12 +66,114 @@ def normalize_movie_showtime_url(movie_url: str, city: str = "chennai", target_d
     return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, new_query, parsed.fragment))
 
 
+CITY_LOCATION_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "chennai": {
+        "cityName": "Chennai", "cityId": 7, "pCityId": "34", "pCityKey": "chennai",
+        "pStateKey": "tamil-nadu", "lat": 13.0827, "long": 80.2707, "fullname": "Chennai, Tamil Nadu, India",
+        "title": "Chennai", "subtitle": "Tamil Nadu"
+    },
+    "bengaluru": {
+        "cityName": "Bengaluru", "cityId": 4, "pCityId": "2", "pCityKey": "bangalore",
+        "pStateKey": "karnataka", "lat": 12.9716, "long": 77.5946, "fullname": "Bengaluru, Karnataka, India",
+        "title": "Bengaluru", "subtitle": "Karnataka"
+    },
+    "mumbai": {
+        "cityName": "Mumbai", "cityId": 3, "pCityId": "3", "pCityKey": "mumbai",
+        "pStateKey": "maharashtra", "lat": 19.0760, "long": 72.8777, "fullname": "Mumbai, Maharashtra, India",
+        "title": "Mumbai", "subtitle": "Maharashtra"
+    },
+    "delhi ncr": {
+        "cityName": "Delhi NCR", "cityId": 1, "pCityId": "1", "pCityKey": "delhi-ncr",
+        "pStateKey": "delhi", "lat": 28.6139, "long": 77.2090, "fullname": "New Delhi, Delhi, India",
+        "title": "Delhi NCR", "subtitle": "Delhi"
+    },
+    "hyderabad": {
+        "cityName": "Hyderabad", "cityId": 6, "pCityId": "6", "pCityKey": "hyderabad",
+        "pStateKey": "telangana", "lat": 17.3850, "long": 78.4867, "fullname": "Hyderabad, Telangana, India",
+        "title": "Hyderabad", "subtitle": "Telangana"
+    },
+    "kolkata": {
+        "cityName": "Kolkata", "cityId": 5, "pCityId": "5", "pCityKey": "kolkata",
+        "pStateKey": "west-bengal", "lat": 22.5726, "long": 88.3639, "fullname": "Kolkata, West Bengal, India",
+        "title": "Kolkata", "subtitle": "West Bengal"
+    },
+    "pune": {
+        "cityName": "Pune", "cityId": 11, "pCityId": "11", "pCityKey": "pune",
+        "pStateKey": "maharashtra", "lat": 18.5204, "long": 73.8567, "fullname": "Pune, Maharashtra, India",
+        "title": "Pune", "subtitle": "Maharashtra"
+    },
+    "kochi": {
+        "cityName": "Kochi", "cityId": 15, "pCityId": "15", "pCityKey": "kochi",
+        "pStateKey": "kerala", "lat": 9.9312, "long": 76.2673, "fullname": "Kochi, Kerala, India",
+        "title": "Kochi", "subtitle": "Kerala"
+    },
+    "ahmedabad": {
+        "cityName": "Ahmedabad", "cityId": 10, "pCityId": "10", "pCityKey": "ahmedabad",
+        "pStateKey": "gujarat", "lat": 23.0225, "long": 72.5714, "fullname": "Ahmedabad, Gujarat, India",
+        "title": "Ahmedabad", "subtitle": "Gujarat"
+    }
+}
+
+def get_city_profile(city: str) -> Dict[str, Any]:
+    key = city.lower().strip()
+    if key in CITY_LOCATION_REGISTRY:
+        return CITY_LOCATION_REGISTRY[key]
+    for reg_key, data in CITY_LOCATION_REGISTRY.items():
+        if reg_key in key or key in reg_key:
+            return data
+    clean_name = city.strip().title()
+    clean_key = clean_name.lower().replace(" ", "-")
+    return {
+        "cityName": clean_name, "cityId": 99, "pCityId": "99", "pCityKey": clean_key,
+        "pStateKey": clean_key, "lat": 13.0827, "long": 80.2707, "fullname": f"{clean_name}, India",
+        "title": clean_name, "subtitle": "India"
+    }
+
 class DistrictClient:
     """
     Playwright-powered client for district.in.
     Handles city context, movie extraction, theatre/showtime discovery,
     and seat chart extraction via JSON-LD, Next.js state, and DOM.
     """
+
+    async def ensure_city_context(self, page: Page, city: str) -> None:
+        """Injects proper location cookies into the browser context to ensure District loads city sessions."""
+        try:
+            profile = get_city_profile(city)
+            location_cookie_val = quote(json.dumps({
+                "fullname": profile["fullname"],
+                "lat": profile["lat"],
+                "long": profile["long"],
+                "subtitle": profile["subtitle"],
+                "title": profile["title"],
+                "id": profile["cityId"],
+                "cityId": profile["cityId"],
+                "cityName": profile["cityName"],
+                "pCityId": profile["pCityId"],
+                "pCityKey": profile["pCityKey"],
+                "pCityName": profile["cityName"],
+                "pStateKey": profile["pStateKey"],
+                "countryId": "1",
+                "placeType": "GOOGLE_PLACE",
+                "countryKey": "india"
+            }))
+            await page.context.add_cookies([
+                {
+                    "name": "location",
+                    "value": location_cookie_val,
+                    "domain": ".district.in",
+                    "path": "/"
+                },
+                {
+                    "name": "selectedCity",
+                    "value": profile["pCityKey"],
+                    "domain": ".district.in",
+                    "path": "/"
+                }
+            ])
+            logger.info(f"Injected city location context for '{profile['cityName']}' ({profile['pCityKey']})")
+        except Exception as e:
+            logger.debug(f"Failed to inject city location cookie: {e}")
 
     async def _capture_debug_screenshot(self, page: Page, name: str = "debug") -> None:
         try:
@@ -119,6 +221,7 @@ class DistrictClient:
         Navigates to district.in/movies and extracts Now Showing and Upcoming movies.
         """
         async with browser_manager.get_page() as page:
+            await self.ensure_city_context(page, city)
             url = f"{DISTRICT_MOVIES_URL}?city={city.lower()}"
             logger.info(f"Fetching movies from {url} (city: {city})...")
             try:
@@ -235,6 +338,7 @@ class DistrictClient:
         theatres, open showtimes, and returns available dates for the movie.
         """
         async with browser_manager.get_page() as page:
+            await self.ensure_city_context(page, city)
             show_url = normalize_movie_showtime_url(movie_url, city=city, target_date=target_date)
             logger.info(f"Loading showtimes from {show_url} (target date: {target_date})...")
 
@@ -394,7 +498,7 @@ class DistrictClient:
                                 mcd = s.get("mcd") or s.get("mid") or ""
                                 cid = content_id or s.get("content_id") or ""
                                 seat_url = (
-                                    f"https://www.district.in/movies/seat-layout/{mcd}?encsessionid={enc_sess}&freeseating=false&fromsessions=true&type=MOVIES&contentid={cid}"
+                                    f"https://www.district.in/movies/seat-layout/{mcd}?encsessionid={enc_sess}&freeseating=false&fromsessions=true&type=MOVIES&contentid={cid}&fromdate={target_date}"
                                     if enc_sess and mcd else None
                                 )
 
@@ -406,13 +510,34 @@ class DistrictClient:
                                         "showtimes": []
                                     }
 
+                                s_avail = s.get("avail")
+                                s_total = s.get("total")
+                                s_status = s.get("seatStatus")
+                                
+                                # Fallback: calculate from areas if top-level avail is missing
+                                if s_avail is None and s.get("areas"):
+                                    try:
+                                        s_avail = sum(int(a.get("sAvail", 0)) for a in s["areas"])
+                                        s_total = sum(int(a.get("sTotal", 0)) for a in s["areas"])
+                                    except Exception:
+                                        pass
+
+                                if not s_status:
+                                    if s_avail == 0:
+                                        s_status = "Sold Out"
+                                    elif s_avail is not None and s_avail > 0:
+                                        s_status = "Available"
+
                                 if not any(x["time_str"] == s_time_text for x in theatres_dict[t_name]["showtimes"]):
                                     theatres_dict[t_name]["showtimes"].append({
                                         "showtime_id": f"{t_id}-{s_time_text}",
                                         "time_str": s_time_text,
                                         "format_tag": video_fmt,
                                         "booking_url_or_selector": seat_url,
-                                        "session_id": enc_sess
+                                        "session_id": enc_sess,
+                                        "avail_seats": s_avail,
+                                        "total_seats": s_total,
+                                        "seat_status": s_status,
                                     })
 
                 # 2. Fallback: If no theatres found via Next.js for target_date, check JSON-LD
@@ -509,6 +634,7 @@ class DistrictClient:
         it into SeatMapResponse with authentic seat availability and pricing.
         """
         async with browser_manager.get_page() as page:
+            await self.ensure_city_context(page, city)
             show_url = normalize_movie_showtime_url(movie_url, city=city, target_date=target_date)
             logger.info(
                 f"Fetching seat map for '{theatre_name}' at {showtime_str} ({target_date})..."
@@ -549,12 +675,18 @@ class DistrictClient:
                         const contentId = sessionsObj.meta?.movie?.content_id || '';
                         const movieTitle = sessionsObj.meta?.movie?.name || '';
 
+                        const targetDate = (args.target_date || '').trim();
+
                         for (const c of arranged) {
                             const cName = (c.data?.name || c.entityName || '').toLowerCase().trim();
                             const matchTheatre = cName.includes(targetTheatre) || targetTheatre.includes(cName) || 
                                                  (targetTheatre.split(' ')[0].length > 3 && cName.includes(targetTheatre.split(' ')[0]));
                             if (matchTheatre) {
                                 for (const s of c.sessions || []) {
+                                    const sDate = (s.showDate || '').trim();
+                                    if (targetDate && sDate && sDate !== targetDate) {
+                                        continue;
+                                    }
                                     const sTime = (s.showTimeText || '').toLowerCase().trim();
                                     const matchTime = sTime === targetTime || 
                                                       sTime.replace(/^0/, '') === targetTime.replace(/^0/, '') || 
@@ -574,7 +706,7 @@ class DistrictClient:
                         }
                         return null;
                     }
-                """, {"theatre_name": theatre_name, "showtime_str": showtime_str})
+                """, {"theatre_name": theatre_name, "showtime_str": showtime_str, "target_date": target_date})
 
                 price_map = {}
                 movie_title = None
@@ -590,7 +722,7 @@ class DistrictClient:
                     cid = session_meta.get("contentId")
 
                     if enc and mcd:
-                        direct_seat_url = f"https://www.district.in/movies/seat-layout/{mcd}?encsessionid={enc}&freeseating=false&fromsessions=true&type=MOVIES&contentid={cid}"
+                        direct_seat_url = f"https://www.district.in/movies/seat-layout/{mcd}?encsessionid={enc}&freeseating=false&fromsessions=true&type=MOVIES&contentid={cid}&fromdate={target_date}"
                         logger.info(f"Navigating to District seat layout route: {direct_seat_url}")
                         try:
                             await page.goto(direct_seat_url, wait_until="domcontentloaded", timeout=25000)
@@ -701,17 +833,19 @@ class DistrictClient:
                         return parsed
 
                 # Check if District page explicitly indicates booking is closed
-                is_closed = await page.evaluate(r"""
-                    () => {
-                        const txt = document.body.innerText || '';
-                        return /booking is (?:now )?closed|booking window (?:for this show )?has closed/i.test(txt);
-                    }
-                """)
-                if is_closed:
-                    raise RuntimeError(
-                        f"Booking is currently closed or not yet open on District for '{theatre_name}' at {showtime_str} ({target_date}). "
-                        f"Use Mode 1 (Show Opening Watcher) to get alerted the instant bookings go live!"
-                    )
+                if not intercepted_json:
+                    is_closed = await page.evaluate(r"""
+                        () => {
+                            const modal = document.querySelector('[class*="BottomSheet"], [class*="Modal"], [role="dialog"]');
+                            const txt = modal ? (modal.innerText || '') : '';
+                            return /booking is (?:now )?closed|booking window (?:for this show )?has closed/i.test(txt);
+                        }
+                    """)
+                    if is_closed:
+                        raise RuntimeError(
+                            f"Booking is currently closed or not yet open on District for '{theatre_name}' at {showtime_str} ({target_date}). "
+                            f"Use Mode 1 (Show Opening Watcher) to get alerted the instant bookings go live!"
+                        )
 
                 # 4. Fallback: Parse Seat Map directly from DOM / SVG (Strict validation)
                 dom_seat_data = await page.evaluate(r"""
@@ -783,6 +917,17 @@ class DistrictClient:
                         theatre_name=theatre_name,
                         showtime_str=showtime_str,
                         date=target_date,
+                    )
+
+                theatre_issue = await page.evaluate(r"""
+                    () => {
+                        const txt = document.body.innerText || '';
+                        return /this theatre is facing issues/i.test(txt);
+                    }
+                """)
+                if theatre_issue:
+                    raise RuntimeError(
+                        f"District reports: 'This theatre is currently facing technical issues on District for {theatre_name} ({showtime_str}). Please try another showtime or check again shortly.'"
                     )
 
                 raise RuntimeError(
