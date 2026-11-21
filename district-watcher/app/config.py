@@ -53,5 +53,5 @@ BLOCKED_DOMAINS = [
 ]
 
 # Mobile Push Notifications (ntfy.sh - free, 100% anonymous, no registration required)
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "district-watcher-alerts")
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "district-watcher-maja")
 
