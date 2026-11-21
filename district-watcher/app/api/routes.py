@@ -225,6 +225,7 @@ async def test_alert(req: TestAlertRequest):
         event_type="TEST",
         title=title,
         message=message,
+        click_url="https://www.district.in",
     )
 
     return {

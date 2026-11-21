@@ -187,6 +187,7 @@ class BackgroundMonitor:
                         event_type="SHOW_OPENED",
                         title=title,
                         message=message,
+                        click_url=movie_url,
                     )
                     await asyncio.sleep(1.0)  # Safe pause between OS toasts
 
@@ -286,6 +287,7 @@ class BackgroundMonitor:
                     event_type="SEATS_AVAILABLE",
                     title=title,
                     message=message,
+                    click_url=movie_url,
                 )
             else:
                 summary = f"Checked at {now_str} — {', '.join(watched_seats)} still booked/held in {theatre_name} ({showtime_str})."

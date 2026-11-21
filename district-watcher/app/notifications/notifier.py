@@ -4,6 +4,8 @@ import subprocess
 import asyncio
 import logging
 from typing import Optional
+import httpx
+from app.config import NTFY_TOPIC
 from app.database import get_settings, create_alert_log
 from app.notifications.sound_alarm import local_alarm
 
@@ -91,15 +93,47 @@ def send_os_desktop_notification(title: str, message: str) -> None:
     except Exception as e:
         logger.debug(f"plyer fallback notification failed: {e}")
 
+async def send_phone_push_notification(title: str, message: str, click_url: Optional[str] = None) -> bool:
+    """Send free push notification to user's phone via ntfy.sh (works when phone is locked & screen off)."""
+    topic = (NTFY_TOPIC or "").strip()
+    if not topic:
+        return False
+    
+    headers = {
+        "Title": title,
+        "Priority": "urgent",
+        "Tags": "ticket,loudspeaker,movie_camera",
+    }
+    if click_url:
+        headers["Click"] = click_url
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://ntfy.sh/{topic}",
+                content=message.encode("utf-8"),
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                logger.info(f"Phone push notification sent via ntfy.sh/{topic}")
+                return True
+            else:
+                logger.warning(f"ntfy.sh responded with {resp.status_code}: {resp.text}")
+                return False
+    except Exception as e:
+        logger.warning(f"ntfy push notification failed: {e}")
+        return False
+
 async def trigger_alert(
     watch_job_id: int,
     event_type: str,
     title: str,
     message: str,
+    click_url: Optional[str] = None,
 ) -> int:
     """
-    Records alert in SQLite DB and fires OS desktop notification (if enabled in settings).
-    The frontend polling /api/alerts/unacknowledged handles browser chime + popup banner.
+    Records alert in SQLite DB, fires OS desktop notification, rings local host alarm,
+    and pushes to user's phone via ntfy.sh (so the phone rings even if browser is closed).
     """
     logger.info(f"Triggering Alert for job #{watch_job_id} [{event_type}]: {title}\n{message}")
     
@@ -120,5 +154,8 @@ async def trigger_alert(
     # 3. Continuous local OS audio cue (runs on host so browser does not need to be open)
     if settings.get("sound_enabled", True):
         local_alarm.start_alarm(timeout_seconds=60)
+
+    # 4. Instant push notification to phone (ntfy.sh)
+    await send_phone_push_notification(title, message, click_url)
 
     return alert_id
